@@ -350,10 +350,48 @@ export const WhiteboardStage: React.FC<WhiteboardStageProps> = ({
       }
     };
 
+    (window as any).__boom_stroke = (stroke: DrawLinePayload[], senderId: string) => {
+      // The server sends the completed stroke as a recovery/synchronization
+      // event in addition to the live segments. Do not add it twice when all
+      // live segments were already received.
+      const existing = allStrokesRef.current[allStrokesRef.current.length - 1];
+      const liveBuffer = remoteBuffersRef.current.get(senderId) || [];
+      const sameStroke = existing && existing.length === stroke.length &&
+        existing.every((seg, i) => seg.prevX === stroke[i].prevX && seg.prevY === stroke[i].prevY &&
+          seg.currX === stroke[i].currX && seg.currY === stroke[i].currY &&
+          seg.color === stroke[i].color && seg.size === stroke[i].size && seg.isEraser === stroke[i].isEraser);
+
+      if (!sameStroke) {
+        // If the live segment events were missed, paint the full stroke now.
+        if (liveBuffer.length === 0) {
+          for (const seg of stroke) {
+            drawSegment(seg.prevX, seg.prevY, seg.currX, seg.currY, seg.color, seg.size, seg.isEraser);
+          }
+          allStrokesRef.current.push([...stroke]);
+        } else if (liveBuffer.length !== stroke.length) {
+          // Complete any partially received stroke with the authoritative
+          // server copy rather than preserving a truncated drawing. The
+          // partial buffer has already been painted directly, so rebuild the
+          // board first to remove those partial pixels.
+          redrawAll();
+          for (const seg of stroke) {
+            drawSegment(seg.prevX, seg.prevY, seg.currX, seg.currY, seg.color, seg.size, seg.isEraser);
+          }
+          allStrokesRef.current.push([...stroke]);
+        }
+      }
+      remoteBuffersRef.current.set(senderId, []);
+    };
+
     (window as any).__boom_strokeEnd = (senderId: string) => {
       const buf = remoteBuffersRef.current.get(senderId);
       if (buf && buf.length > 0) {
-        allStrokesRef.current.push(buf);
+        const existing = allStrokesRef.current[allStrokesRef.current.length - 1];
+        const same = existing && existing.length === buf.length &&
+          existing.every((seg, i) => seg.prevX === buf[i].prevX && seg.prevY === buf[i].prevY &&
+            seg.currX === buf[i].currX && seg.currY === buf[i].currY &&
+            seg.color === buf[i].color && seg.size === buf[i].size && seg.isEraser === buf[i].isEraser);
+        if (!same) allStrokesRef.current.push([...buf]);
       }
       remoteBuffersRef.current.set(senderId, []);
     };
@@ -399,6 +437,7 @@ export const WhiteboardStage: React.FC<WhiteboardStageProps> = ({
 
     return () => {
       delete (window as any).__boom_drawSegment;
+      delete (window as any).__boom_stroke;
       delete (window as any).__boom_strokeEnd;
       delete (window as any).__boom_undo;
       delete (window as any).__boom_redo;

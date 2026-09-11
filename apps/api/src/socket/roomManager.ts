@@ -591,7 +591,18 @@ export class RoomManager {
       const canEdit = !!p && (socket.id === room.hostSocketId || room.whiteboardEditors.has(socket.id));
       if (!canEdit) return;
       const stroke = room.whiteboardCurrentStroke.get(socket.id) || [];
-      if (stroke.length) room.whiteboardHistory.push(stroke);
+      if (stroke.length) {
+        room.whiteboardHistory.push(stroke);
+        // Send the completed stroke as a reliable synchronization point.
+        // Live segment events are intentionally lightweight, but a viewer can
+        // miss them if the whiteboard component is mounting/re-rendering at
+        // exactly the same time the stroke is made. The completed stroke lets
+        // the viewer recover without requiring a page refresh.
+        socket.to(meetingCode).emit('whiteboard:stroke', {
+          stroke,
+          senderId: socket.id,
+        });
+      }
       room.whiteboardCurrentStroke.delete(socket.id);
       socket.to(meetingCode).emit('whiteboard:strokeEnd', { senderId: socket.id });
       this.io.to(meetingCode).emit('whiteboard:historyState', { canUndo: room.whiteboardUndoStack.length > 0, canRedo: room.whiteboardRedoStack.length > 0 });

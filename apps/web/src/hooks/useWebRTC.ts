@@ -31,6 +31,7 @@ interface UseWebRTCProps {
   onMeetingEnded?: (reason: string) => void;
   onHostMediaDisabled?: (media: 'audio' | 'video') => void;
   onWhiteboardDraw?: (line: DrawLinePayload, senderId: string) => void;
+  onWhiteboardStroke?: (stroke: DrawLinePayload[], senderId: string) => void;
   onWhiteboardStrokeEnd?: (senderId: string) => void;
   onWhiteboardUndo?: () => void;
   onWhiteboardRedo?: () => void;
@@ -155,6 +156,7 @@ export function useWebRTC({
   onMeetingEnded,
   onHostMediaDisabled,
   onWhiteboardDraw,
+  onWhiteboardStroke,
   onWhiteboardStrokeEnd,
   onWhiteboardUndo,
   onWhiteboardRedo,
@@ -239,6 +241,7 @@ export function useWebRTC({
   const onMeetingEndedRef = useRef(onMeetingEnded);
   const onHostMediaDisabledRef = useRef(onHostMediaDisabled);
   const onWhiteboardDrawRef = useRef(onWhiteboardDraw);
+  const onWhiteboardStrokeRef = useRef(onWhiteboardStroke);
   const onWhiteboardStrokeEndRef = useRef(onWhiteboardStrokeEnd);
   const onWhiteboardUndoRef = useRef(onWhiteboardUndo);
   const onWhiteboardRedoRef = useRef(onWhiteboardRedo);
@@ -266,6 +269,7 @@ export function useWebRTC({
   onMeetingEndedRef.current = onMeetingEnded;
   onHostMediaDisabledRef.current = onHostMediaDisabled;
   onWhiteboardDrawRef.current = onWhiteboardDraw;
+  onWhiteboardStrokeRef.current = onWhiteboardStroke;
   onWhiteboardStrokeEndRef.current = onWhiteboardStrokeEnd;
   onWhiteboardUndoRef.current = onWhiteboardUndo;
   onWhiteboardRedoRef.current = onWhiteboardRedo;
@@ -388,9 +392,13 @@ export function useWebRTC({
         remoteMediaStream.addTrack(track);
       }
 
+      // Keep one stable MediaStream object per peer. Replacing the MediaStream
+      // object on every ontrack event forces the <audio> element to tear down
+      // and restart decoding. During renegotiation that can produce the loud
+      // repeating/whistling artifact heard after speech stops.
       setRemoteStreams((prev) => {
         const next = new Map(prev);
-        next.set(remoteSocketId, new MediaStream(remoteMediaStream.getTracks()));
+        next.set(remoteSocketId, remoteMediaStream);
         return next;
       });
 
@@ -683,6 +691,10 @@ export function useWebRTC({
 
     socket.on('whiteboard:draw', (data) => {
       onWhiteboardDrawRef.current?.(data.line, data.senderId);
+    });
+
+    socket.on('whiteboard:stroke', (data) => {
+      onWhiteboardStrokeRef.current?.(data.stroke, data.senderId);
     });
 
     socket.on('whiteboard:strokeEnd', (data) => {

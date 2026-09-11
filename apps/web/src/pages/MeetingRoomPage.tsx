@@ -23,7 +23,6 @@ import type { Participant, DrawLinePayload, EraseRectPayload, WhiteboardAsset, W
 
 const RemoteAudioPlayer: React.FC<{ stream: MediaStream | null; enabled: boolean }> = ({ stream, enabled }) => {
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const attachedTrackIdRef = useRef<string | null>(null);
 
   const audioTrack = stream?.getAudioTracks()[0] || null;
   const trackId = audioTrack?.id || null;
@@ -36,17 +35,20 @@ const RemoteAudioPlayer: React.FC<{ stream: MediaStream | null; enabled: boolean
       if (audio.srcObject) {
         audio.srcObject = null;
       }
-      attachedTrackIdRef.current = null;
       return;
     }
 
-    // Only assign srcObject if the track has actually changed to prevent audio decoding resets / clicking
-    if (attachedTrackIdRef.current !== trackId || !audio.srcObject) {
-      attachedTrackIdRef.current = trackId;
-      audio.srcObject = new MediaStream([audioTrack]);
+    // Keep the exact same MediaStream object attached to the audio element.
+    // The WebRTC hook maintains one stable stream per peer and swaps tracks
+    // inside it. Reassigning srcObject whenever a track is renegotiated causes
+    // the browser audio decoder to restart, which can create a stuck whistle,
+    // feedback-like loop, or repeated audio after speech ends.
+    if (audio.srcObject !== stream) {
+      audio.srcObject = stream;
     }
 
     audio.muted = !enabled;
+    audio.volume = 1;
 
     if (enabled) {
       audio.play().catch(() => {});
@@ -185,6 +187,18 @@ export const MeetingRoomPage: React.FC = () => {
     }
   }, []);
 
+  const handleRemoteStroke = useCallback((stroke: DrawLinePayload[], senderId: string) => {
+    if (typeof (window as any).__boom_stroke === 'function') {
+      (window as any).__boom_stroke(stroke, senderId);
+      return;
+    }
+
+    // If the whiteboard component is still mounting, retain the authoritative
+    // completed stroke in React state instead of dropping it. The board will
+    // render this history as soon as it mounts.
+    setWhiteboardHistory((prev) => [...prev, stroke]);
+  }, []);
+
   const handleRemoteStrokeEnd = useCallback((senderId: string) => {
     if (typeof (window as any).__boom_strokeEnd === 'function') {
       (window as any).__boom_strokeEnd(senderId);
@@ -278,6 +292,7 @@ export const MeetingRoomPage: React.FC = () => {
       else setAudioState(false);
     },
     onWhiteboardDraw: handleRemoteDraw,
+    onWhiteboardStroke: handleRemoteStroke,
     onWhiteboardStrokeEnd: handleRemoteStrokeEnd,
     onWhiteboardUndo: handleRemoteUndo,
     onWhiteboardRedo: () => {
