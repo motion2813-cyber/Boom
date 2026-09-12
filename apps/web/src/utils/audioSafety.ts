@@ -76,15 +76,32 @@ export function createProcessedMicTrack(rawTrack: MediaStreamTrack): ProcessedMi
     highpass.Q.value = 0.7;
 
     // Fast, aggressive limiter. This is the primary defense: even if a
-    // residual echo starts to repeat, a 16:1 ratio with a 2ms attack clamps
+    // residual echo starts to repeat, a 20:1 ratio with a ~1ms attack clamps
     // it within a couple of audio blocks instead of letting it ramp up over
     // seconds like the runaway tone in the diagnostic recording did.
     const limiter = ctx.createDynamicsCompressor();
-    limiter.threshold.value = -28;
-    limiter.knee.value = 6;
-    limiter.ratio.value = 16;
-    limiter.attack.value = 0.002;
-    limiter.release.value = 0.1;
+    limiter.threshold.value = -32;
+    limiter.knee.value = 4;
+    limiter.ratio.value = 20;
+    limiter.attack.value = 0.001;
+    limiter.release.value = 0.08;
+
+    // Brick-wall ceiling. The compressor above is a *ratio*-based limiter —
+    // it reduces gain proportionally but can still let a loud spike through
+    // at high level. This waveshaper caps the sample value outright, so no
+    // matter how fast a loop compounds, the maximum possible output level
+    // is fixed. This matters most for real acoustic feedback between two
+    // separate physical devices (speaker of one bleeding into the mic of
+    // the other) — that loop can build faster over a real network than the
+    // compressor's release time alone can track.
+    const ceiling = ctx.createWaveShaper();
+    const ceilingCurve = new Float32Array(4);
+    ceilingCurve[0] = -0.7;
+    ceilingCurve[1] = -0.7;
+    ceilingCurve[2] = 0.7;
+    ceilingCurve[3] = 0.7;
+    ceiling.curve = ceilingCurve;
+    ceiling.oversample = '4x';
 
     // "Circuit breaker" gain. The howl detector below yanks this down for a
     // few hundred ms whenever it sees the exact signature of a feedback
@@ -97,21 +114,22 @@ export function createProcessedMicTrack(rawTrack: MediaStreamTrack): ProcessedMi
 
     source.connect(highpass);
     highpass.connect(limiter);
-    limiter.connect(breaker);
+    limiter.connect(ceiling);
+    ceiling.connect(breaker);
     breaker.connect(destination);
 
     // --- Howl detector ---
     // ScriptProcessorNode is deprecated in favor of AudioWorklet, but it
     // needs no separate module file to load/bundle and is still supported
     // everywhere, so it's the pragmatic choice for a self-contained fix.
-    const processor = ctx.createScriptProcessor(2048, 1, 1);
+    const processor = ctx.createScriptProcessor(512, 1, 1);
     const analysisSink = ctx.createGain();
     analysisSink.gain.value = 0; // never actually audible; required only to drive the graph's pull-clock
     breaker.connect(processor);
     processor.connect(analysisSink);
     analysisSink.connect(ctx.destination);
 
-    const HISTORY_LENGTH = 24; // ~1s of history at typical block sizes
+    const HISTORY_LENGTH = 8; // ~0.08-0.1s of history — reacts within a fraction of a second
     const rmsHistory: number[] = [];
     let duckedUntil = 0;
 
@@ -130,22 +148,22 @@ export function createProcessedMicTrack(rawTrack: MediaStreamTrack): ProcessedMi
 
       // Feedback signature: level climbs almost every single block in a row
       // (normal speech rises and falls constantly; a howl doesn't) AND has
-      // reached a level well above normal speech peaks.
+      // reached a level above the normal room/mic noise floor.
       let climbingBlocks = 0;
       for (let i = 1; i < rmsHistory.length; i++) {
-        if (rmsHistory[i] >= rmsHistory[i - 1] * 0.97) climbingBlocks++;
+        if (rmsHistory[i] >= rmsHistory[i - 1] * 0.98) climbingBlocks++;
       }
-      const isClimbing = climbingBlocks >= HISTORY_LENGTH - 3;
-      const isLoud = rms > 0.09;
+      const isClimbing = climbingBlocks >= HISTORY_LENGTH - 1;
+      const isLoud = rms > 0.025;
 
       if (isClimbing && isLoud) {
         const t = ctx.currentTime;
         breaker.gain.cancelScheduledValues(t);
         breaker.gain.setValueAtTime(breaker.gain.value, t);
-        breaker.gain.linearRampToValueAtTime(0.02, t + 0.05);
-        breaker.gain.setValueAtTime(0.02, t + 0.45);
-        breaker.gain.linearRampToValueAtTime(1, t + 0.75);
-        duckedUntil = t + 0.8;
+        breaker.gain.linearRampToValueAtTime(0.01, t + 0.02);
+        breaker.gain.setValueAtTime(0.01, t + 0.8);
+        breaker.gain.linearRampToValueAtTime(1, t + 1.2);
+        duckedUntil = t + 1.2;
         rmsHistory.length = 0;
       }
     };
@@ -159,6 +177,7 @@ export function createProcessedMicTrack(rawTrack: MediaStreamTrack): ProcessedMi
         try { source.disconnect(); } catch {}
         try { highpass.disconnect(); } catch {}
         try { limiter.disconnect(); } catch {}
+        try { ceiling.disconnect(); } catch {}
         try { breaker.disconnect(); } catch {}
         try { processor.disconnect(); } catch {}
         try { analysisSink.disconnect(); } catch {}
@@ -189,19 +208,30 @@ export function attachPlaybackLimiter(mediaElement: HTMLMediaElement): PlaybackL
   try {
     const mediaSource = ctx.createMediaElementSource(mediaElement);
     const limiter = ctx.createDynamicsCompressor();
-    limiter.threshold.value = -18;
-    limiter.knee.value = 6;
-    limiter.ratio.value = 12;
-    limiter.attack.value = 0.003;
-    limiter.release.value = 0.15;
+    limiter.threshold.value = -20;
+    limiter.knee.value = 4;
+    limiter.ratio.value = 16;
+    limiter.attack.value = 0.002;
+    limiter.release.value = 0.12;
+
+    const ceiling = ctx.createWaveShaper();
+    const ceilingCurve = new Float32Array(4);
+    ceilingCurve[0] = -0.8;
+    ceilingCurve[1] = -0.8;
+    ceilingCurve[2] = 0.8;
+    ceilingCurve[3] = 0.8;
+    ceiling.curve = ceilingCurve;
+    ceiling.oversample = '4x';
 
     mediaSource.connect(limiter);
-    limiter.connect(ctx.destination);
+    limiter.connect(ceiling);
+    ceiling.connect(ctx.destination);
 
     return {
       dispose: () => {
         try { mediaSource.disconnect(); } catch {}
         try { limiter.disconnect(); } catch {}
+        try { ceiling.disconnect(); } catch {}
       },
     };
   } catch (err) {

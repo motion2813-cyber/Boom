@@ -467,12 +467,33 @@ export function useWebRTC({
     // in one direction until someone refreshes. restartIce() re-runs ICE
     // gathering/negotiation without tearing down the whole PeerConnection.
     let recoveryTimer: ReturnType<typeof setTimeout> | null = null;
+    let loggedCandidateType = false;
     pc.oniceconnectionstatechange = () => {
       if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
         setConnectionQuality('EXCELLENT');
         if (recoveryTimer) {
           clearTimeout(recoveryTimer);
           recoveryTimer = null;
+        }
+
+        // Diagnostic only: log whether media is flowing direct (host/srflx,
+        // ~1-30ms) or through a TURN relay (adds real network RTT, which is
+        // one of the ways an otherwise-manageable acoustic loop can turn
+        // into a compounding howl — echo cancellation's delay estimation
+        // has a much harder time with relayed, jittery round trips).
+        if (!loggedCandidateType) {
+          loggedCandidateType = true;
+          pc.getStats().then((stats) => {
+            stats.forEach((report) => {
+              if (report.type === 'candidate-pair' && report.state === 'succeeded' && report.nominated) {
+                const localCandidate = stats.get(report.localCandidateId);
+                const remoteCandidate = stats.get(report.remoteCandidateId);
+                console.info(
+                  `[Boom WebRTC] Active path for ${remoteSocketId}: local=${localCandidate?.candidateType ?? '?'} remote=${remoteCandidate?.candidateType ?? '?'} rtt=${report.currentRoundTripTime ?? '?'}s`
+                );
+              }
+            });
+          }).catch(() => {});
         }
       } else if (pc.iceConnectionState === 'disconnected') {
         setConnectionQuality('UNSTABLE');

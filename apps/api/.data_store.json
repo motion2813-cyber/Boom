@@ -993,31 +993,13 @@
       "leftAt": "2026-09-11T05:41:16.083Z"
     },
     {
-      "id": "do4tytfgQB27wM78AAAA",
+      "id": "x9k8KhRS9k9-KbmKAAAA",
       "meetingId": "meet_42f1cc5a-dce6-45ad-8ad1-1f92633d2b9d",
       "userId": null,
-      "displayName": "Zak121212",
+      "displayName": "Zak1",
       "isHost": true,
-      "joinedAt": "2026-09-12T07:31:59.078Z",
-      "leftAt": "2026-09-12T07:42:49.125Z"
-    },
-    {
-      "id": "FhjmlHWqVLo228MiAAAB",
-      "meetingId": "meet_42f1cc5a-dce6-45ad-8ad1-1f92633d2b9d",
-      "userId": null,
-      "displayName": "Zak1",
-      "isHost": false,
-      "joinedAt": "2026-09-12T07:32:08.326Z",
-      "leftAt": "2026-09-12T07:35:23.713Z"
-    },
-    {
-      "id": "vjA2VDEzB5GF8YnyAAAC",
-      "meetingId": "meet_42f1cc5a-dce6-45ad-8ad1-1f92633d2b9d",
-      "userId": null,
-      "displayName": "Zak1",
-      "isHost": false,
-      "joinedAt": "2026-09-12T07:35:24.245Z",
-      "leftAt": "2026-09-12T07:42:49.157Z"
+      "joinedAt": "2026-09-12T10:34:47.228Z",
+      "leftAt": "2026-09-12T10:34:50.660Z"
     }
   ],
   "messages": {}
