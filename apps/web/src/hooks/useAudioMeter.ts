@@ -1,32 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
+import { getSharedAudioContext } from '../utils/audioSafety';
 
-let sharedAudioContext: AudioContext | null = null;
-
-function getSharedAudioContext(): AudioContext | null {
-  try {
-    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-    if (!AudioCtx) return null;
-    if (!sharedAudioContext || sharedAudioContext.state === 'closed') {
-      sharedAudioContext = new AudioCtx();
-    }
-    return sharedAudioContext;
-  } catch {
-    return null;
-  }
-}
-
-// Global user gesture handler to resume AudioContext as soon as user interacts
-if (typeof window !== 'undefined') {
-  const resumeCtx = () => {
-    if (sharedAudioContext && sharedAudioContext.state === 'suspended') {
-      sharedAudioContext.resume().catch(() => {});
-    }
-  };
-  window.addEventListener('click', resumeCtx);
-  window.addEventListener('keydown', resumeCtx);
-  window.addEventListener('touchstart', resumeCtx);
-  window.addEventListener('pointerdown', resumeCtx);
-}
+// AudioContext + autoplay-unlock handling now lives in utils/audioSafety.ts
+// as a single shared instance used by every audio feature in the app
+// (meter, outgoing mic processing, incoming playback limiter). Keeping one
+// context instead of several avoids redundant autoplay-unlock listeners and
+// makes the mic/playback safety chains share the same audio clock.
 
 export function useAudioMeter(stream: MediaStream | null, isMuted: boolean = false) {
   const [volume, setVolume] = useState<number>(0); // 0 to 100

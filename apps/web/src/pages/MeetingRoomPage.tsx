@@ -19,6 +19,7 @@ import { WhiteboardRequestModal } from '../components/meeting/WhiteboardRequestM
 import { useMediaStream } from '../hooks/useMediaStream';
 import { useScreenShare } from '../hooks/useScreenShare';
 import { useWebRTC } from '../hooks/useWebRTC';
+import { attachPlaybackLimiter } from '../utils/audioSafety';
 import type { Participant, DrawLinePayload, EraseRectPayload, WhiteboardAsset, WhiteboardCursor, WhiteboardText, WhiteboardShape } from '@boom/types';
 
 const RemoteAudioPlayer: React.FC<{ stream: MediaStream | null; enabled: boolean }> = ({ stream, enabled }) => {
@@ -76,6 +77,19 @@ const RemoteAudioPlayer: React.FC<{ stream: MediaStream | null; enabled: boolean
       window.removeEventListener('touchstart', unlockAutoplay);
     };
   }, [enabled]);
+
+  // Receive-side safety net: route this element's output through a limiter
+  // before it reaches your speakers. This protects you even if the remote
+  // peer is on an older client whose outgoing audio isn't capped. Web Audio
+  // only allows createMediaElementSource() to be called once per element, so
+  // this runs exactly once, right after the element mounts.
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    const handle = attachPlaybackLimiter(audio);
+    return () => handle?.dispose();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <audio

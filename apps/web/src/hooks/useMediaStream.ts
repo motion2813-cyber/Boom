@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { createProcessedMicTrack, type ProcessedMicHandle } from '../utils/audioSafety';
 
 export interface MediaDeviceInfoList {
   audioInputs: MediaDeviceInfo[];
@@ -28,6 +29,23 @@ export function useMediaStream(initialAudio = true, initialVideo = true) {
   const streamRef = useRef<MediaStream | null>(null);
   const audioEnabledRef = useRef<boolean>(initialAudio);
   const videoEnabledRef = useRef<boolean>(initialVideo);
+  // The raw, unprocessed mic track straight from getUserMedia. Kept around
+  // only so it can be stopped when we tear down/replace the stream — the
+  // processed track (in streamRef/`stream`) is what actually gets toggled,
+  // metered, and sent over WebRTC.
+  const rawAudioTrackRef = useRef<MediaStreamTrack | null>(null);
+  const processedMicRef = useRef<ProcessedMicHandle | null>(null);
+
+  const teardownAudioChain = useCallback(() => {
+    if (processedMicRef.current) {
+      processedMicRef.current.dispose();
+      processedMicRef.current = null;
+    }
+    if (rawAudioTrackRef.current) {
+      rawAudioTrackRef.current.stop();
+      rawAudioTrackRef.current = null;
+    }
+  }, []);
 
   audioEnabledRef.current = audioEnabled;
   videoEnabledRef.current = videoEnabled;
@@ -58,6 +76,7 @@ export function useMediaStream(initialAudio = true, initialVideo = true) {
         streamRef.current.getTracks().forEach((track) => track.stop());
         streamRef.current = null;
       }
+      teardownAudioChain();
 
       const constraints: MediaStreamConstraints = {
         audio: {
@@ -65,13 +84,15 @@ export function useMediaStream(initialAudio = true, initialVideo = true) {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
-          channelCount: { exact: 1 },
+          // `ideal` rather than `exact`: an exact channelCount can push some
+          // browser/device combinations off their normal fully-processed
+          // capture path (and can hard-fail getUserMedia entirely on
+          // hardware that doesn't offer exactly 1 channel), which is one of
+          // the ways residual echo/feedback can sneak past AEC in the first
+          // place.
+          channelCount: { ideal: 1 },
           sampleRate: { ideal: 48000 },
           sampleSize: { ideal: 16 },
-          // Chrome supports this on compatible devices; unsupported optional
-          // constraints are ignored by the browser. It provides a stronger
-          // speech-focused path when available without breaking other browsers.
-          ...( { voiceIsolation: true } as MediaTrackConstraints ),
         },
         video: videoDeviceId
           ? { deviceId: { exact: videoDeviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }
@@ -80,16 +101,41 @@ export function useMediaStream(initialAudio = true, initialVideo = true) {
 
       try {
         const userStream = await navigator.mediaDevices.getUserMedia(constraints);
-        streamRef.current = userStream;
-        setStream(userStream);
+
+        // Route the raw mic track through the highpass filter + limiter +
+        // howl-guard chain (see utils/audioSafety.ts) before it ever reaches
+        // a meter, a local preview, or a peer connection. This is what
+        // actually stops a feedback loop from building into the loud
+        // high-pitched tone instead of just relying on AEC to fully cancel
+        // it every time.
+        const rawAudioTrack = userStream.getAudioTracks()[0] || null;
+        let finalStream = userStream;
+
+        if (rawAudioTrack) {
+          const processed = createProcessedMicTrack(rawAudioTrack);
+          if (processed) {
+            processedMicRef.current = processed;
+            rawAudioTrackRef.current = rawAudioTrack;
+            // Keep the raw track itself always "live" internally — the
+            // exposed processed track is what gets muted/unmuted, and it
+            // keeps producing correct (silent) output either way.
+            rawAudioTrack.enabled = true;
+            finalStream = new MediaStream([processed.track, ...userStream.getVideoTracks()]);
+          }
+          // If Web Audio isn't available at all, finalStream just stays as
+          // the raw userStream — same behavior as before this fix.
+        }
+
+        streamRef.current = finalStream;
+        setStream(finalStream);
 
         // Apply current audio/video toggle states
-        const audioTracks = userStream.getAudioTracks();
+        const audioTracks = finalStream.getAudioTracks();
         if (audioTracks.length > 0) {
           audioTracks[0].enabled = audioEnabledRef.current;
         }
 
-        const videoTracks = userStream.getVideoTracks();
+        const videoTracks = finalStream.getVideoTracks();
         if (videoTracks.length > 0) {
           videoTracks[0].enabled = videoEnabledRef.current;
         }
@@ -123,7 +169,7 @@ export function useMediaStream(initialAudio = true, initialVideo = true) {
         setIsLoading(false);
       }
     },
-    [updateDevices]
+    [updateDevices, teardownAudioChain]
   );
 
   useEffect(() => {
@@ -138,8 +184,9 @@ export function useMediaStream(initialAudio = true, initialVideo = true) {
         streamRef.current.getTracks().forEach((track) => track.stop());
         streamRef.current = null;
       }
+      teardownAudioChain();
     };
-  }, [initMedia, updateDevices]);
+  }, [initMedia, updateDevices, teardownAudioChain]);
 
   // Toggle Microphone
   const toggleAudio = useCallback(() => {
